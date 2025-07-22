@@ -1,59 +1,17 @@
-# Full updated logcat_viewer.py with Phase 1 enhancements: Log Level Filters, ADB Buffer Options, and Summary Panel
-
-import sys
-import subprocess
-import threading
 import os
 from collections import defaultdict
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QVBoxLayout, QWidget,
-    QLineEdit, QTextEdit, QPushButton, QHBoxLayout, QFileDialog,
-    QLabel, QSpacerItem, QSizePolicy, QCheckBox, QComboBox, QGroupBox, QGridLayout
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit,
+    QTextEdit, QPushButton, QCheckBox, QComboBox, QSpacerItem, QSizePolicy,
+    QFileDialog, QGroupBox, QGridLayout
 )
-from PySide6.QtCore import Qt, Signal, QObject
-from PySide6.QtGui import QTextCursor, QFont, QFontDatabase, QTextCharFormat, QColor
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont, QFontDatabase, QTextCursor
 
-
-class LogSignal(QObject):
-    new_line = Signal(str)
-
-
-class LogcatWorker(threading.Thread):
-    def __init__(self, signal: LogSignal, buffer: str):
-        super().__init__(daemon=True)
-        self.signal = signal
-        self.running = True
-        self.paused = False
-        self.process = None
-        self.buffer = buffer
-
-    def run(self):
-        self.process = subprocess.Popen(
-            ["adb", "logcat", "-b", self.buffer],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
-        for line in self.process.stdout:
-            if not self.running:
-                break
-            if not self.paused:
-                self.signal.new_line.emit(line)
-
-    def stop(self):
-        self.running = False
-        if self.process:
-            self.process.terminate()
-
-    def restart(self, buffer):
-        self.stop()
-        self.buffer = buffer
-        self.running = True
-        self.paused = False
-        self.run()
-
+from log_signal import LogSignal
+from logcat_worker import LogcatWorker
+from utils.formatting import get_format_for_line, get_level
 
 class LogcatViewer(QMainWindow):
     def __init__(self):
@@ -65,23 +23,13 @@ class LogcatViewer(QMainWindow):
         self.auto_scroll = True
         self.log_lines = []
         self.paused = False
-        self.level_filters = {
-            "error": True,
-            "warn": True,
-            "info": True,
-            "debug": True,
-            "verbose": True,
-        }
+        self.level_filters = {lvl: True for lvl in ["error", "warn", "info", "debug", "verbose"]}
         self.log_counts = defaultdict(int)
 
         font_path = os.path.join(os.path.dirname(__file__), "PressStart2P-Regular.ttf")
         font_id = QFontDatabase.addApplicationFont(font_path)
-        if font_id != -1:
-            family = QFontDatabase.applicationFontFamilies(font_id)[0]
-            self.retro_font = QFont(family, 9)
-        else:
-            self.retro_font = QFont("Courier New", 9)
-
+        family = QFontDatabase.applicationFontFamilies(font_id)[0] if font_id != -1 else "Courier New"
+        self.retro_font = QFont(family, 9)
         self.setFont(self.retro_font)
 
         self.title_label = QLabel("ADB Logcat Viewer")
@@ -127,7 +75,7 @@ class LogcatViewer(QMainWindow):
 
         filter_group = QGroupBox("Log Level Filters")
         filter_layout = QGridLayout()
-        for i, (level, cb) in enumerate(self.level_checkboxes.items()):
+        for i, cb in enumerate(self.level_checkboxes.values()):
             filter_layout.addWidget(cb, 0, i)
         filter_group.setLayout(filter_layout)
 
@@ -178,84 +126,36 @@ class LogcatViewer(QMainWindow):
         self.worker.start()
 
     def apply_theme(self):
-        if self.dark_theme:
-            self.setStyleSheet(f"""
-                QWidget {{
-                    background-color: #121212;
-                    color: #dcdcdc;
-                    font-family: '{self.retro_font.family()}';
-                }}
-                QLineEdit, QTextEdit, QComboBox {{
-                    background-color: #1e1e1e;
-                    color: #dcdcdc;
-                    border: 1px solid #444;
-                    padding: 6px;
-                }}
-                QPushButton {{
-                    background-color: #333;
-                    color: #00FF7F;
-                    border: 1px solid #00FF7F;
-                    padding: 8px;
-                }}
-                QCheckBox {{
-                    padding: 4px;
-                }}
-            """)
-        else:
-            self.setStyleSheet(f"""
-                QWidget {{
-                    background-color: #ffffff;
-                    color: #222;
-                    font-family: '{self.retro_font.family()}';
-                }}
-                QLineEdit, QTextEdit, QComboBox {{
-                    background-color: #ffffff;
-                    color: #222;
-                    border: 1px solid #ccc;
-                    padding: 6px;
-                }}
-                QPushButton {{
-                    background-color: #eee;
-                    color: #222;
-                    border: 1px solid #666;
-                    padding: 8px;
-                }}
-                QCheckBox {{
-                    padding: 4px;
-                }}
-            """)
+        dark = self.dark_theme
+        base_color = "#121212" if dark else "#ffffff"
+        text_color = "#dcdcdc" if dark else "#222"
+        border_color = "#444" if dark else "#ccc"
+        button_color = "#333" if dark else "#eee"
+        button_text = "#00FF7F" if dark else "#222"
+        button_border = "#00FF7F" if dark else "#666"
 
-    def get_format_for_line(self, line):
-        fmt = QTextCharFormat()
-        fmt.setFont(self.retro_font)
-        line_lower = line.lower()
-
-        if "error" in line_lower:
-            fmt.setForeground(QColor("red"))
-        elif "warn" in line_lower:
-            fmt.setForeground(QColor("yellow"))
-        elif "info" in line_lower:
-            fmt.setForeground(QColor("green"))
-        elif "debug" in line_lower:
-            fmt.setForeground(QColor("cyan"))
-        else:
-            fmt.setForeground(QColor("#dcdcdc" if self.dark_theme else "#222"))
-
-        return fmt
-
-    def get_level(self, line: str):
-        line_lower = line.lower()
-        if "error" in line_lower:
-            return "error"
-        elif "warn" in line_lower:
-            return "warn"
-        elif "info" in line_lower:
-            return "info"
-        elif "debug" in line_lower:
-            return "debug"
-        elif "verbose" in line_lower:
-            return "verbose"
-        return "other"
+        self.setStyleSheet(f"""
+            QWidget {{
+                background-color: {base_color};
+                color: {text_color};
+                font-family: '{self.retro_font.family()}';
+            }}
+            QLineEdit, QTextEdit, QComboBox {{
+                background-color: {base_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                padding: 6px;
+            }}
+            QPushButton {{
+                background-color: {button_color};
+                color: {button_text};
+                border: 1px solid {button_border};
+                padding: 8px;
+            }}
+            QCheckBox {{
+                padding: 4px;
+            }}
+        """)
 
     def update_summary(self):
         summary = "Total: {} | Error: {} | Warn: {} | Info: {} | Debug: {}".format(
@@ -269,18 +169,17 @@ class LogcatViewer(QMainWindow):
 
     def append_log(self, line: str):
         self.log_lines.append(line)
-        level = self.get_level(line)
+        level = get_level(line)
         self.log_counts[level] += 1
         self.update_summary()
 
         if not self.level_filters.get(level, True):
             return
         if self.search_box.text().lower() in line.lower():
-            fmt = self.get_format_for_line(line)
+            fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
             cursor = self.log_output.textCursor()
             cursor.movePosition(QTextCursor.End)
             cursor.insertText(line, fmt)
-
             if self.auto_scroll:
                 self.log_output.moveCursor(QTextCursor.End)
 
@@ -288,9 +187,9 @@ class LogcatViewer(QMainWindow):
         query = self.search_box.text().lower()
         self.log_output.clear()
         for line in self.log_lines:
-            level = self.get_level(line)
+            level = get_level(line)
             if self.level_filters.get(level, True) and query in line.lower():
-                fmt = self.get_format_for_line(line)
+                fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
                 cursor = self.log_output.textCursor()
                 cursor.movePosition(QTextCursor.End)
                 cursor.insertText(line, fmt)
@@ -323,10 +222,3 @@ class LogcatViewer(QMainWindow):
     def closeEvent(self, event):
         self.worker.stop()
         super().closeEvent(event)
-
-
-if __name__ == "__main__":
-    app = QApplication(sys.argv)
-    viewer = LogcatViewer()
-    viewer.show()
-    sys.exit(app.exec())
