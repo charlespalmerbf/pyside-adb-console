@@ -1,12 +1,13 @@
 import sys
 import os
-from collections import defaultdict
 import re
+from collections import defaultdict
+from PySide6.QtGui import QFontDatabase
 
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QVBoxLayout, QWidget,
     QLineEdit, QTextEdit, QPushButton, QHBoxLayout, QLabel,
-    QSpacerItem, QSizePolicy, QCheckBox, QComboBox, QGroupBox, QGridLayout
+    QSpacerItem, QSizePolicy, QCheckBox, QComboBox, QGroupBox, QGridLayout, QFileDialog
 )
 from PySide6.QtCore import Qt, Signal, QObject, QEvent
 from PySide6.QtGui import QTextCursor, QFont, QFontDatabase, QTextCharFormat, QColor
@@ -61,11 +62,14 @@ class LogcatViewer(QMainWindow):
         self.buffer_select.currentTextChanged.connect(self.change_buffer)
 
         self.log_output = QTextEdit()
+
+        courier_font = QFont("Courier", 10)
+        self.log_output.setFont(courier_font)
+        self.log_output_font = courier_font
+
         self.log_output.setReadOnly(True)
-        self.log_output.setLineWrapMode(QTextEdit.NoWrap)
-        # Set standard monospace font for log output (overrides retro font)
-        mono_font = QFontDatabase.systemFont(QFontDatabase.FixedFont)
-        self.log_output.setFont(mono_font)
+        self.log_output.setLineWrapMode(QTextEdit.WidgetWidth)
+        # Removed setFont here to let stylesheet handle monospace font
 
         # Install event filter on viewport for mouse clicks to pin/unpin lines
         self.log_output.viewport().installEventFilter(self)
@@ -106,16 +110,16 @@ class LogcatViewer(QMainWindow):
         button_layout.addWidget(self.buffer_select)
 
         # === NEW RIGHT PANEL ===
-        import logcat_right_panel  # assume this module has RightPanel class
+        import logcat_right_panel
         self.right_panel = logcat_right_panel.RightPanel(self)
 
-        # Wrap right panel in container widget to control fixed width
+        # Container for right panel - fixed width 25% of window width
         self.right_panel_container = QWidget()
         self.right_panel_container.setLayout(self.right_panel)
-        self.right_panel_container.setMinimumWidth(250)  # minimum width fallback
-        self.right_panel_container.setMaximumWidth(400)  # max width fallback
+        self.right_panel_container.setMinimumWidth(250)
+        self.right_panel_container.setMaximumWidth(400)
 
-        # Main layout for left side
+        # Left main layout
         main_layout = QVBoxLayout()
         main_layout.addLayout(title_wrapper)
         main_layout.addWidget(self.search_box)
@@ -124,7 +128,7 @@ class LogcatViewer(QMainWindow):
         main_layout.addWidget(self.summary_label)
         main_layout.addLayout(button_layout)
 
-        # Horizontal layout combining left main and right panel
+        # Horizontal layout for main + right panel
         layout = QHBoxLayout()
         layout.addLayout(main_layout)
         layout.addWidget(self.right_panel_container)
@@ -147,7 +151,7 @@ class LogcatViewer(QMainWindow):
     def eventFilter(self, obj, event):
         if obj == self.log_output.viewport() and event.type() == QEvent.MouseButtonPress:
             cursor = self.log_output.cursorForPosition(event.pos())
-            cursor.select(QTextCursor.SelectionType.LineUnderCursor)
+            cursor.select(QTextCursor.LineUnderCursor)
             line = cursor.selectedText()
             if not line.strip():
                 return super().eventFilter(obj, event)
@@ -165,15 +169,13 @@ class LogcatViewer(QMainWindow):
         self.right_panel.pinned_output.append(line.strip())
 
     def remove_pinned_log(self, line: str):
-        cursor = self.right_panel.pinned_output.textCursor()
-        cursor.movePosition(QTextCursor.Start)
-        while True:
-            cursor = self.right_panel.pinned_output.document().find(line.strip(), cursor)
-            if cursor.isNull():
-                break
+        doc = self.right_panel.pinned_output.document()
+        cursor = doc.find(line.strip())
+        while not cursor.isNull():
             cursor.select(QTextCursor.LineUnderCursor)
             cursor.removeSelectedText()
-            cursor.deleteChar()  # remove newline
+            cursor.deleteChar()  # Remove newline
+            cursor = doc.find(line.strip(), cursor)
 
     def update_filters(self):
         for level, cb in self.level_checkboxes.items():
@@ -198,13 +200,23 @@ class LogcatViewer(QMainWindow):
             QWidget {{
                 background-color: {base_color};
                 color: {text_color};
+            }}
+            QLabel, QLineEdit, QComboBox, QPushButton, QCheckBox {{
                 font-family: '{self.retro_font.family()}';
             }}
-            QLineEdit, QTextEdit, QComboBox {{
+            QLineEdit, QComboBox {{
                 background-color: {base_color};
                 color: {text_color};
                 border: 1px solid {border_color};
                 padding: 6px;
+            }}
+            QTextEdit {{
+                background-color: {base_color};
+                color: {text_color};
+                border: 1px solid {border_color};
+                padding: 6px;
+                font-family: "Courier New", monospace;
+                font-size: 10pt;
             }}
             QPushButton {{
                 background-color: {button_color};
@@ -215,7 +227,8 @@ class LogcatViewer(QMainWindow):
             QCheckBox {{
                 padding: 4px;
             }}
-        """)
+    """)
+
 
     def update_summary(self):
         summary = "Total: {} | Error: {} | Warn: {} | Info: {} | Debug: {}".format(
@@ -237,7 +250,7 @@ class LogcatViewer(QMainWindow):
             return
 
         if self.should_show_line(line):
-            fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
+            fmt = get_format_for_line(line, self.log_output_font, self.dark_theme)
             cursor = self.log_output.textCursor()
             cursor.movePosition(QTextCursor.End)
             cursor.insertText(line, fmt)
@@ -270,7 +283,7 @@ class LogcatViewer(QMainWindow):
             if not self.level_filters.get(get_level(line), True):
                 continue
             if self.should_show_line(line):
-                fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
+                fmt = get_format_for_line(line, self.log_output_font, self.dark_theme)
                 cursor = self.log_output.textCursor()
                 cursor.movePosition(QTextCursor.End)
                 cursor.insertText(line, fmt)

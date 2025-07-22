@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QVBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit
 )
+from PySide6.QtGui import QFont
 
 class RightPanel(QVBoxLayout):
     def __init__(self, parent):
@@ -42,7 +43,7 @@ class RightPanel(QVBoxLayout):
         self.addWidget(QLabel("Pinned Logs"))
         self.pinned_output = QTextEdit()
         self.pinned_output.setReadOnly(True)
-        self.addWidget(self.pinned_output)
 
-    def append_pinned_log(self, line):
-        self.pinned_output.append(line.strip())
+        # Remove setFont here, monospace forced by stylesheet in main window
+
+        self.addWidget(self.pinned_output)
