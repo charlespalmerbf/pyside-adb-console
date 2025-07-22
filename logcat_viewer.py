@@ -13,11 +13,12 @@ from log_signal import LogSignal
 from logcat_worker import LogcatWorker
 from utils.formatting import get_format_for_line, get_level
 
+
 class LogcatViewer(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ADB Logcat Viewer")
-        self.resize(1100, 750)
+        self.resize(1200, 750)
 
         self.dark_theme = True
         self.auto_scroll = True
@@ -32,6 +33,10 @@ class LogcatViewer(QMainWindow):
         self.retro_font = QFont(family, 9)
         self.setFont(self.retro_font)
 
+        self.signal = LogSignal()
+        self.signal.new_line.connect(self.append_log)
+
+        # Title & Main Controls
         self.title_label = QLabel("ADB Logcat Viewer")
         self.title_label.setFont(QFont(self.retro_font.family(), 12))
         self.title_label.setAlignment(Qt.AlignCenter)
@@ -45,6 +50,7 @@ class LogcatViewer(QMainWindow):
         self.search_box = QLineEdit()
         self.search_box.setPlaceholderText("Filter logs")
         self.search_box.setClearButtonEnabled(True)
+        self.search_box.textChanged.connect(self.refresh_log_display)
 
         self.buffer_select = QComboBox()
         self.buffer_select.addItems(["main", "system", "crash", "radio", "events"])
@@ -66,6 +72,7 @@ class LogcatViewer(QMainWindow):
         self.summary_label.setAlignment(Qt.AlignLeft)
         self.summary_label.setStyleSheet("padding: 4px;")
 
+        # Log Level Checkboxes
         self.level_checkboxes = {}
         for level in self.level_filters:
             cb = QCheckBox(level.capitalize())
@@ -88,25 +95,60 @@ class LogcatViewer(QMainWindow):
         button_layout.addWidget(QLabel("Buffer:"))
         button_layout.addWidget(self.buffer_select)
 
-        layout = QVBoxLayout()
-        layout.addLayout(title_wrapper)
-        layout.addWidget(self.search_box)
-        layout.addWidget(filter_group)
-        layout.addWidget(self.log_output)
-        layout.addWidget(self.summary_label)
-        layout.addLayout(button_layout)
+        # === NEW RIGHT PANEL ===
+        right_panel = QVBoxLayout()
+
+        self.regex_input = QLineEdit()
+        self.regex_input.setPlaceholderText("Regex Search")
+        self.regex_input.textChanged.connect(self.refresh_log_display)
+        right_panel.addWidget(QLabel("Regex Filter"))
+        right_panel.addWidget(self.regex_input)
+
+        self.tag_input = QLineEdit()
+        self.tag_input.setPlaceholderText("Tag Filter")
+        self.tag_input.textChanged.connect(self.refresh_log_display)
+        right_panel.addWidget(QLabel("Tag Filter"))
+        right_panel.addWidget(self.tag_input)
+
+        self.pid_input = QLineEdit()
+        self.pid_input.setPlaceholderText("PID/TID Filter")
+        self.pid_input.textChanged.connect(self.refresh_log_display)
+        right_panel.addWidget(QLabel("PID/TID Filter"))
+        right_panel.addWidget(self.pid_input)
+
+        self.load_button = QPushButton("Load Logs from File")
+        self.load_button.clicked.connect(self.load_logs_from_file)
+        right_panel.addWidget(self.load_button)
+
+        self.export_filtered_button = QPushButton("Export Filtered Logs")
+        self.export_filtered_button.clicked.connect(self.export_filtered_logs)
+        right_panel.addWidget(self.export_filtered_button)
+
+        right_panel.addWidget(QLabel("Pinned Logs"))
+        self.pinned_output = QTextEdit()
+        self.pinned_output.setReadOnly(True)
+        right_panel.addWidget(self.pinned_output)
+
+        # Layout Combine
+        main_layout = QVBoxLayout()
+        main_layout.addLayout(title_wrapper)
+        main_layout.addWidget(self.search_box)
+        main_layout.addWidget(filter_group)
+        main_layout.addWidget(self.log_output)
+        main_layout.addWidget(self.summary_label)
+        main_layout.addLayout(button_layout)
+
+        layout = QHBoxLayout()
+        layout.addLayout(main_layout)
+        layout.addLayout(right_panel)
 
         container = QWidget()
         container.setLayout(layout)
         self.setCentralWidget(container)
 
-        self.signal = LogSignal()
-        self.signal.new_line.connect(self.append_log)
-
         self.worker = LogcatWorker(self.signal, self.buffer_select.currentText())
         self.worker.start()
 
-        self.search_box.textChanged.connect(self.refresh_log_display)
         self.pause_button.clicked.connect(self.toggle_pause)
         self.clear_button.clicked.connect(self.clear_logs)
         self.export_button.clicked.connect(self.export_logs)
@@ -173,9 +215,13 @@ class LogcatViewer(QMainWindow):
         self.log_counts[level] += 1
         self.update_summary()
 
+        if "!!pin" in line.lower():
+            self.pinned_output.append(line.strip())
+
         if not self.level_filters.get(level, True):
             return
-        if self.search_box.text().lower() in line.lower():
+
+        if self.should_show_line(line):
             fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
             cursor = self.log_output.textCursor()
             cursor.movePosition(QTextCursor.End)
@@ -183,12 +229,33 @@ class LogcatViewer(QMainWindow):
             if self.auto_scroll:
                 self.log_output.moveCursor(QTextCursor.End)
 
-    def refresh_log_display(self):
+    def should_show_line(self, line: str) -> bool:
+        import re
         query = self.search_box.text().lower()
+        regex = self.regex_input.text()
+        tag = self.tag_input.text().lower()
+        pid = self.pid_input.text().strip()
+
+        if query and query not in line.lower():
+            return False
+        if tag and tag not in line.lower():
+            return False
+        if pid and pid not in line:
+            return False
+        if regex:
+            try:
+                if not re.search(regex, line):
+                    return False
+            except re.error:
+                return False
+        return True
+
+    def refresh_log_display(self):
         self.log_output.clear()
         for line in self.log_lines:
-            level = get_level(line)
-            if self.level_filters.get(level, True) and query in line.lower():
+            if not self.level_filters.get(get_level(line), True):
+                continue
+            if self.should_show_line(line):
                 fmt = get_format_for_line(line, self.retro_font, self.dark_theme)
                 cursor = self.log_output.textCursor()
                 cursor.movePosition(QTextCursor.End)
@@ -203,6 +270,7 @@ class LogcatViewer(QMainWindow):
         self.log_lines.clear()
         self.log_output.clear()
         self.log_counts.clear()
+        self.pinned_output.clear()
         self.update_summary()
 
     def export_logs(self):
@@ -210,6 +278,25 @@ class LogcatViewer(QMainWindow):
         if filename:
             with open(filename, "w", encoding="utf-8") as f:
                 f.write(self.log_output.toPlainText())
+
+    def export_filtered_logs(self):
+        filename, _ = QFileDialog.getSaveFileName(self, "Export Filtered Logs", "", "Text Files (*.txt)")
+        if filename:
+            with open(filename, "w", encoding="utf-8") as f:
+                for line in self.log_lines:
+                    if self.level_filters.get(get_level(line), True) and self.should_show_line(line):
+                        f.write(line)
+
+    def load_logs_from_file(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Open Log File", "", "Text Files (*.txt)")
+        if filename:
+            with open(filename, "r", encoding="utf-8") as f:
+                self.log_lines = f.readlines()
+            self.log_counts.clear()
+            for line in self.log_lines:
+                self.log_counts[get_level(line)] += 1
+            self.update_summary()
+            self.refresh_log_display()
 
     def toggle_theme(self):
         self.dark_theme = not self.dark_theme

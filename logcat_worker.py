@@ -1,5 +1,5 @@
-import subprocess
 import threading
+import subprocess
 
 class LogcatWorker(threading.Thread):
     def __init__(self, signal, buffer: str):
