@@ -1,8 +1,6 @@
 from PySide6.QtWidgets import (
-    QVBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit, QFileDialog
+    QVBoxLayout, QLabel, QLineEdit, QPushButton, QTextEdit
 )
-from PySide6.QtGui import QTextCursor
-import re
 
 class RightPanel(QVBoxLayout):
     def __init__(self, parent):
